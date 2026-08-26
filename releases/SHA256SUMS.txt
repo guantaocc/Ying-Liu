@@ -1,0 +1,2 @@
+fd5e559a90c2a1d1258b87046c4395651eb10dccca77b2e416a7f24caa3df004  Ying-Liu_0.1.0_aarch64.dmg
+e950c847484a649698c67399755ae77e36aa494d4daf4c8511f45ebf89cca834  Ying-Liu_0.1.0_macos-arm64_portable.zip
