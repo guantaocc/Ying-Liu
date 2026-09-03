@@ -17,6 +17,8 @@ use tokio::{
     sync::Mutex,
 };
 
+mod x;
+
 const USER_AGENT: &str =
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/124 Safari/537.36";
 const CHUNK_SIZE: u64 = 4 * 1024 * 1024;
@@ -27,6 +29,8 @@ const PARALLEL_CHUNKS: usize = 6;
 struct QualityOption {
     id: u32,
     label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    url: Option<String>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -41,6 +45,7 @@ struct DirectPart {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct VideoInfo {
+    platform: String,
     bvid: String,
     title: String,
     page_title: String,
@@ -270,6 +275,9 @@ fn expires_at(url: &str) -> Option<u64> {
 }
 
 async fn resolve(input: &str, preferred_quality: Option<u32>) -> Result<VideoInfo, String> {
+    if x::extract_status_id(input).is_some() {
+        return x::resolve_public(input, preferred_quality).await;
+    }
     let client = http_client()?;
     let bvid = normalize_bvid(&client, input.trim()).await?;
     let view = fetch_view(&client, &bvid).await?;
@@ -293,6 +301,7 @@ async fn resolve(input: &str, preferred_quality: Option<u32>) -> Result<VideoInf
                 .get(index)
                 .cloned()
                 .unwrap_or_else(|| quality_name(*id)),
+            url: None,
         })
         .collect::<Vec<_>>();
 
@@ -317,6 +326,7 @@ async fn resolve(input: &str, preferred_quality: Option<u32>) -> Result<VideoInf
         .unwrap_or_else(|| quality_name(play.quality));
 
     Ok(VideoInfo {
+        platform: "Bilibili".into(),
         bvid: view.bvid,
         title: view.title,
         page_title: page.part.clone(),
@@ -343,6 +353,14 @@ async fn parse_video(input: String) -> Result<VideoInfo, String> {
 }
 
 #[tauri::command]
+async fn parse_video_with_curl(input: String, curl_text: String) -> Result<VideoInfo, String> {
+    if curl_text.trim().is_empty() {
+        return Err("请先粘贴从浏览器复制的 cURL".into());
+    }
+    x::resolve_with_curl(&input, &curl_text).await
+}
+
+#[tauri::command]
 async fn resolve_quality(input: String, quality: u32) -> Result<VideoInfo, String> {
     resolve(&input, Some(quality)).await
 }
@@ -360,14 +378,24 @@ fn safe_extension(path: &Path) -> Result<(), String> {
     }
 }
 
+fn source_headers(input: &str) -> (&'static str, &'static str) {
+    if input.contains("twimg.com") {
+        ("https://x.com/", "https://x.com")
+    } else {
+        ("https://www.bilibili.com/", "https://www.bilibili.com")
+    }
+}
+
 async fn remote_size(client: &Client, url: &str, hinted: u64) -> Result<u64, String> {
     if hinted > 0 {
         return Ok(hinted);
     }
+    let (referer, origin) = source_headers(url);
     let response = client
         .get(url)
         .header(header::RANGE, "bytes=0-0")
-        .header(header::REFERER, "https://www.bilibili.com/")
+        .header(header::REFERER, referer)
+        .header(header::ORIGIN, origin)
         .send()
         .await
         .map_err(|error| format!("无法读取文件大小：{error}"))?;
@@ -411,11 +439,12 @@ async fn download_part(
         let client = client.clone();
         let url = url.clone();
         async move {
+            let (referer, origin) = source_headers(&url);
             let response = client
                 .get(&url)
                 .header(header::RANGE, format!("bytes={start}-{end}"))
-                .header(header::REFERER, "https://www.bilibili.com/")
-                .header(header::ORIGIN, "https://www.bilibili.com")
+                .header(header::REFERER, referer)
+                .header(header::ORIGIN, origin)
                 .send()
                 .await
                 .map_err(|error| format!("分片请求失败：{error}"))?;
@@ -566,6 +595,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             parse_video,
+            parse_video_with_curl,
             resolve_quality,
             download_video,
             current_unix_time

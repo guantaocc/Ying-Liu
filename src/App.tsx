@@ -27,10 +27,11 @@ import {
 import { Toaster, toast } from "sonner";
 import "./App.css";
 
-type QualityOption = { id: number; label: string };
+type QualityOption = { id: number; label: string; url?: string };
 type DirectPart = { order: number; url: string; size: number; durationMs: number };
 
 type VideoInfo = {
+  platform: string;
   bvid: string;
   title: string;
   pageTitle: string;
@@ -105,6 +106,9 @@ function App() {
   const [progress, setProgress] = useState<Progress | null>(null);
   const [history, setHistory] = useState<DownloadRecord[]>(readHistory);
   const [showDetails, setShowDetails] = useState(false);
+  const [showCurlFallback, setShowCurlFallback] = useState(false);
+  const [curlText, setCurlText] = useState("");
+  const [isParsingCurl, setIsParsingCurl] = useState(false);
 
   const isDownloading = progress?.status === "downloading";
   const expiryText = useMemo(() => {
@@ -127,25 +131,69 @@ function App() {
 
   async function parseLink() {
     if (!url.trim()) {
-      toast.error("请先粘贴一个 Bilibili 视频链接");
+      toast.error("请先粘贴一个视频链接");
       return;
     }
     setIsParsing(true);
     setVideo(null);
     setProgress(null);
+    setShowCurlFallback(false);
     try {
       const result = await invoke<VideoInfo>("parse_video", { input: url.trim() });
       setVideo(result);
       toast.success("解析完成，直链已生成");
     } catch (error) {
-      toast.error(String(error), { duration: 5000 });
+      const message = String(error);
+      if (message.includes("X_CURL_REQUIRED:")) {
+        setShowCurlFallback(true);
+        toast.info("该 X 视频需要登录请求，已打开本机 cURL 重试", { duration: 5000 });
+      } else {
+        toast.error(message, { duration: 5000 });
+      }
     } finally {
       setIsParsing(false);
     }
   }
 
+  async function parseWithCurl() {
+    if (!curlText.trim()) {
+      toast.error("请先粘贴从浏览器复制的 cURL");
+      return;
+    }
+    setIsParsingCurl(true);
+    try {
+      const result = await invoke<VideoInfo>("parse_video_with_curl", {
+        input: url.trim(),
+        curlText,
+      });
+      setVideo(result);
+      setShowCurlFallback(false);
+      setCurlText("");
+      toast.success("X 视频解析完成，登录信息未保存");
+    } catch (error) {
+      toast.error(String(error), { duration: 6500 });
+    } finally {
+      setIsParsingCurl(false);
+    }
+  }
+
   async function changeQuality(quality: number) {
     if (!video || quality === video.qualityId) return;
+    const localQuality = video.qualities.find((item) => item.id === quality);
+    if (video.platform.startsWith("X") && localQuality?.url) {
+      setVideo({
+        ...video,
+        qualityId: quality,
+        qualityLabel: localQuality.label,
+        directUrl: localQuality.url,
+        parts: video.parts.map((part, index) =>
+          index === 0 ? { ...part, url: localQuality.url!, size: 0 } : part
+        ),
+        estimatedSize: 0,
+      });
+      toast.success(`已切换为 ${localQuality.label}`);
+      return;
+    }
     setIsChangingQuality(true);
     try {
       const result = await invoke<VideoInfo>("resolve_quality", { input: url.trim(), quality });
@@ -209,6 +257,8 @@ function App() {
     setVideo(null);
     setProgress(null);
     setUrl("");
+    setCurlText("");
+    setShowCurlFallback(false);
   }
 
   return (
@@ -230,7 +280,7 @@ function App() {
         <div className="privacy-note"><ShieldCheck size={16} /><span>解析与下载均在<br />你的设备上完成</span></div>
         <button className="nav-item plain" type="button"><Settings2 size={17} />偏好设置</button>
         <button className="nav-item plain" type="button"><CircleHelp size={17} />使用帮助</button>
-        <div className="version">映流 0.1.0 · Tauri 2</div>
+        <div className="version">映流 0.2.0 · Tauri 2</div>
         </aside>
 
         <main className="workspace">
@@ -243,7 +293,7 @@ function App() {
           <section className="hero">
             <div className="eyebrow"><Sparkles size={14} />专注、快速、无广告</div>
             <h1>把喜欢的视频，<br /><em>好好留在这里。</em></h1>
-            <p>粘贴 Bilibili 视频链接，生成临时直链并分片下载到本地。</p>
+            <p>粘贴 Bilibili 或 X/Twitter 视频链接，生成临时直链并分片下载到本地。</p>
           </section>
 
           <section className={`parser-card ${isParsing ? "is-loading" : ""}`}>
@@ -260,7 +310,7 @@ function App() {
                   aria-label="视频链接"
                   value={url}
                   onChange={(event) => setUrl(event.target.value)}
-                  placeholder="粘贴 Bilibili 视频链接…"
+                  placeholder="粘贴 Bilibili 或 X/Twitter 视频链接…"
                   spellCheck={false}
                   disabled={isParsing || isDownloading}
                 />
@@ -272,10 +322,38 @@ function App() {
               </button>
             </form>
             <div className="parser-meta">
-              <span><Check size={13} />目前支持 Bilibili BV 链接与 b23.tv 短链</span>
+              <span><Check size={13} />支持 Bilibili、b23.tv 与 X/Twitter 动态链接</span>
               <button type="button" onClick={() => setUrl(EXAMPLE_URL)}>填入示例</button>
             </div>
           </section>
+
+          {showCurlFallback && !isParsing && (
+            <section className="curl-fallback" aria-live="polite">
+              <div className="curl-heading">
+                <div className="curl-icon"><ShieldCheck size={19} /></div>
+                <div>
+                  <strong>此 X 视频需要登录请求</strong>
+                  <p>在浏览器开发者工具的 Network 中找到 <code>TweetResultByRestId</code> 或 <code>TweetDetail</code>，右键选择 Copy as cURL。</p>
+                </div>
+              </div>
+              <textarea
+                value={curlText}
+                onChange={(event) => setCurlText(event.target.value)}
+                placeholder="在这里粘贴以 curl 开头的完整请求…"
+                aria-label="X 推文详情 cURL"
+                spellCheck={false}
+                disabled={isParsingCurl}
+              />
+              <div className="curl-actions">
+                <span><ShieldCheck size={13} />仅在内存中使用，不执行、不保存</span>
+                <button type="button" onClick={() => void parseWithCurl()} disabled={isParsingCurl}>
+                  {isParsingCurl ? <LoaderCircle className="spin" size={16} /> : <Zap size={16} />}
+                  {isParsingCurl ? "正在重试" : "使用 cURL 重试"}
+                </button>
+              </div>
+              <p className="curl-warning">你提供的 <code>avatar_content</code> 请求不含推文视频数据，请复制上面两类“推文详情”请求。请勿把 cURL 分享给其他人。</p>
+            </section>
+          )}
 
           {isParsing && (
             <section className="analysis-state" aria-live="polite">
@@ -290,13 +368,13 @@ function App() {
               <div className="section-heading"><span><Check size={15} />解析完成</span><button type="button" onClick={reset}><RotateCcw size={14} />解析新链接</button></div>
               <article className="result-card">
                 <div className="cover-wrap">
-                  <img src={video.cover} alt="视频封面" />
+                  {video.cover ? <img src={video.cover} alt="视频封面" /> : <div className="cover-placeholder"><Film size={30} /></div>}
                   <span className="duration"><Play size={11} fill="currentColor" />{formatDuration(video.duration)}</span>
                 </div>
                 <div className="video-info">
-                  <div className="platform-row"><span className="platform-badge">Bilibili</span><code>{video.bvid}</code></div>
+                  <div className="platform-row"><span className={`platform-badge ${video.platform.startsWith("X") ? "x" : ""}`}>{video.platform}</span><code>{video.bvid}</code></div>
                   <h2>{video.title}</h2>
-                  <p className="author">UP 主 · {video.owner}{video.pageTitle !== video.title && ` · ${video.pageTitle}`}</p>
+                  <p className="author">{video.platform.startsWith("X") ? "发布者" : "UP 主"} · {video.owner}{video.pageTitle !== video.title && ` · ${video.pageTitle}`}</p>
 
                   <div className="format-row">
                     <label>
@@ -331,7 +409,7 @@ function App() {
                   <div className="details-panel">
                     <span>格式 <strong>{video.format.toUpperCase()}</strong></span>
                     <span>媒体段 <strong>{video.parts.length}</strong></span>
-                    <span>网络分片 <strong>{Math.ceil(video.estimatedSize / (4 * 1024 * 1024))}</strong></span>
+                    <span>网络分片 <strong>{video.estimatedSize ? Math.ceil(video.estimatedSize / (4 * 1024 * 1024)) : "下载时检测"}</strong></span>
                   </div>
                 )}
               </article>
