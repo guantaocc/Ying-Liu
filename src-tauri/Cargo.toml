@@ -1,6 +1,6 @@
 [package]
 name = "ying-liu"
-version = "0.2.0"
+version = "0.3.0"
 description = "A focused Bilibili, Douyin and X/Twitter video link parser and segmented downloader"
 authors = ["guantaocc"]
 edition = "2021"
