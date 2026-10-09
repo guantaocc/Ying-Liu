@@ -271,7 +271,7 @@ pub(super) async fn resolve_public(
         .map_err(|error| format!("X_CURL_REQUIRED:{error}"))
 }
 
-fn tokenize_curl(input: &str) -> Result<Vec<String>, String> {
+pub(super) fn tokenize_curl(input: &str) -> Result<Vec<String>, String> {
     let mut tokens = Vec::new();
     let mut current = String::new();
     let mut chars = input.chars().peekable();

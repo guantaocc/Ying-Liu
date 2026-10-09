@@ -110,6 +110,7 @@ function App() {
   const [curlText, setCurlText] = useState("");
   const [isParsingCurl, setIsParsingCurl] = useState(false);
 
+  const isDouyin = /(?:douyin|iesdouyin)\.com/i.test(url);
   const isDownloading = progress?.status === "downloading";
   const expiryText = useMemo(() => {
     if (!video?.expiresAt) return "临时直链";
@@ -144,9 +145,9 @@ function App() {
       toast.success("解析完成，直链已生成");
     } catch (error) {
       const message = String(error);
-      if (message.includes("X_CURL_REQUIRED:")) {
+      if (message.includes("X_CURL_REQUIRED:") || message.includes("DOUYIN_CURL_REQUIRED:")) {
         setShowCurlFallback(true);
-        toast.info("该 X 视频需要登录请求，已打开本机 cURL 重试", { duration: 5000 });
+        toast.info("该视频需要浏览器请求，已打开本机 cURL 重试", { duration: 5000 });
       } else {
         toast.error(message, { duration: 5000 });
       }
@@ -169,7 +170,7 @@ function App() {
       setVideo(result);
       setShowCurlFallback(false);
       setCurlText("");
-      toast.success("X 视频解析完成，登录信息未保存");
+      toast.success("视频解析完成，登录信息未保存");
     } catch (error) {
       toast.error(String(error), { duration: 6500 });
     } finally {
@@ -180,7 +181,7 @@ function App() {
   async function changeQuality(quality: number) {
     if (!video || quality === video.qualityId) return;
     const localQuality = video.qualities.find((item) => item.id === quality);
-    if (video.platform.startsWith("X") && localQuality?.url) {
+    if (localQuality?.url) {
       setVideo({
         ...video,
         qualityId: quality,
@@ -293,7 +294,7 @@ function App() {
           <section className="hero">
             <div className="eyebrow"><Sparkles size={14} />专注、快速、无广告</div>
             <h1>把喜欢的视频，<br /><em>好好留在这里。</em></h1>
-            <p>粘贴 Bilibili 或 X/Twitter 视频链接，生成临时直链并分片下载到本地。</p>
+            <p>粘贴 Bilibili、抖音或 X/Twitter 视频链接，生成临时直链并分片下载到本地。</p>
           </section>
 
           <section className={`parser-card ${isParsing ? "is-loading" : ""}`}>
@@ -310,7 +311,7 @@ function App() {
                   aria-label="视频链接"
                   value={url}
                   onChange={(event) => setUrl(event.target.value)}
-                  placeholder="粘贴 Bilibili 或 X/Twitter 视频链接…"
+                  placeholder="粘贴 Bilibili、抖音或 X/Twitter 视频链接…"
                   spellCheck={false}
                   disabled={isParsing || isDownloading}
                 />
@@ -322,7 +323,7 @@ function App() {
               </button>
             </form>
             <div className="parser-meta">
-              <span><Check size={13} />支持 Bilibili、b23.tv 与 X/Twitter 动态链接</span>
+              <span><Check size={13} />支持 Bilibili、抖音（含分享短链）与 X/Twitter</span>
               <button type="button" onClick={() => setUrl(EXAMPLE_URL)}>填入示例</button>
             </div>
           </section>
@@ -332,15 +333,15 @@ function App() {
               <div className="curl-heading">
                 <div className="curl-icon"><ShieldCheck size={19} /></div>
                 <div>
-                  <strong>此 X 视频需要登录请求</strong>
-                  <p>在浏览器开发者工具的 Network 中找到 <code>TweetResultByRestId</code> 或 <code>TweetDetail</code>，右键选择 Copy as cURL。</p>
+                  <strong>{isDouyin ? "此抖音视频需要浏览器请求" : "此 X 视频需要登录请求"}</strong>
+                  <p>{isDouyin ? <>在浏览器打开该作品，完成登录或验证。在开发者工具 Network 中找到 <code>aweme/v1/web/aweme/detail</code>，右键选择 Copy as cURL。</> : <>在浏览器开发者工具的 Network 中找到 <code>TweetResultByRestId</code> 或 <code>TweetDetail</code>，右键选择 Copy as cURL。</>}</p>
                 </div>
               </div>
               <textarea
                 value={curlText}
                 onChange={(event) => setCurlText(event.target.value)}
                 placeholder="在这里粘贴以 curl 开头的完整请求…"
-                aria-label="X 推文详情 cURL"
+                aria-label="视频详情 cURL"
                 spellCheck={false}
                 disabled={isParsingCurl}
               />
@@ -351,7 +352,7 @@ function App() {
                   {isParsingCurl ? "正在重试" : "使用 cURL 重试"}
                 </button>
               </div>
-              <p className="curl-warning">你提供的 <code>avatar_content</code> 请求不含推文视频数据，请复制上面两类“推文详情”请求。请勿把 cURL 分享给其他人。</p>
+              <p className="curl-warning">请复制当前作品的详情请求。cURL 可能含登录凭证，请勿分享给其他人。</p>
             </section>
           )}
 
@@ -374,7 +375,7 @@ function App() {
                 <div className="video-info">
                   <div className="platform-row"><span className={`platform-badge ${video.platform.startsWith("X") ? "x" : ""}`}>{video.platform}</span><code>{video.bvid}</code></div>
                   <h2>{video.title}</h2>
-                  <p className="author">{video.platform.startsWith("X") ? "发布者" : "UP 主"} · {video.owner}{video.pageTitle !== video.title && ` · ${video.pageTitle}`}</p>
+                  <p className="author">{video.platform === "Bilibili" ? "UP 主" : "发布者"} · {video.owner}{video.pageTitle !== video.title && ` · ${video.pageTitle}`}</p>
 
                   <div className="format-row">
                     <label>

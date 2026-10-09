@@ -17,6 +17,7 @@ use tokio::{
     sync::Mutex,
 };
 
+mod douyin;
 mod x;
 
 const USER_AGENT: &str =
@@ -275,6 +276,9 @@ fn expires_at(url: &str) -> Option<u64> {
 }
 
 async fn resolve(input: &str, preferred_quality: Option<u32>) -> Result<VideoInfo, String> {
+    if douyin::is_link(input) {
+        return douyin::resolve_public(input, preferred_quality).await;
+    }
     if x::extract_status_id(input).is_some() {
         return x::resolve_public(input, preferred_quality).await;
     }
@@ -357,6 +361,9 @@ async fn parse_video_with_curl(input: String, curl_text: String) -> Result<Video
     if curl_text.trim().is_empty() {
         return Err("请先粘贴从浏览器复制的 cURL".into());
     }
+    if douyin::is_link(&input) {
+        return douyin::resolve_with_curl(&input, &curl_text).await;
+    }
     x::resolve_with_curl(&input, &curl_text).await
 }
 
@@ -381,6 +388,24 @@ fn safe_extension(path: &Path) -> Result<(), String> {
 fn source_headers(input: &str) -> (&'static str, &'static str) {
     if input.contains("twimg.com") {
         ("https://x.com/", "https://x.com")
+    } else if url::Url::parse(input)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_owned))
+        .map(|host| {
+            [
+                "douyinvod.com",
+                "douyin.com",
+                "iesdouyin.com",
+                "amemv.com",
+                "365yg.com",
+                "bytecdn.cn",
+            ]
+            .iter()
+            .any(|root| host == *root || host.ends_with(&format!(".{root}")))
+        })
+        .unwrap_or(false)
+    {
+        ("https://www.douyin.com/", "https://www.douyin.com")
     } else {
         ("https://www.bilibili.com/", "https://www.bilibili.com")
     }
@@ -399,6 +424,9 @@ async fn remote_size(client: &Client, url: &str, hinted: u64) -> Result<u64, Str
         .send()
         .await
         .map_err(|error| format!("无法读取文件大小：{error}"))?;
+    if !response.status().is_success() {
+        return Err(format!("读取文件大小失败（{}）", response.status()));
+    }
     if let Some(value) = response
         .headers()
         .get(header::CONTENT_RANGE)
@@ -453,10 +481,15 @@ async fn download_part(
             {
                 return Err(format!("下载服务拒绝了分片请求（{}）", response.status()));
             }
+            let partial = response.status() == StatusCode::PARTIAL_CONTENT;
             let bytes = response
                 .bytes()
                 .await
                 .map_err(|error| format!("读取分片失败：{error}"))?;
+            let expected = if partial { end - start + 1 } else { size };
+            if bytes.len() as u64 != expected || (!partial && size > CHUNK_SIZE) {
+                return Err("服务端未正确返回请求的分片，已停止下载以避免文件损坏".into());
+            }
             Ok::<_, String>((start, bytes))
         }
     }))
